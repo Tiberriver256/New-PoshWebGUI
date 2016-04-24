@@ -1,4 +1,4 @@
-﻿Function Start-PoshWebGUI ($ScriptBlock)
+Function Start-PoshWebGUI ($ScriptBlock)
 {
     # We create a scriptblock that waits for the server to launch and then opens a web browser control
     $UserWindow = {
@@ -14,25 +14,33 @@
                 }
                 catch
                 { start-sleep -Seconds 1; Wait-ServerLaunch }
-
+ 
             }
 
             Wait-ServerLaunch
-            [Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms") | out-null
-            [Reflection.Assembly]::LoadWithPartialName("System.Drawing")
-            $form = New-Object Windows.Forms.Form
-            $form.text = $GUITitle
-            $form.size = New-Object Drawing.size @(800,600)
-            $form.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon("C:\cms\OneDrive Fix\Haworth.ico")
-            $web = New-object System.Windows.Forms.webbrowser
-            $web.location = New-object System.Drawing.Point(3,3)
-            $web.minimumsize = new-object System.Drawing.Size(20,20)
-            $web.size = New-object System.Drawing.size(780,580)
-            
-            # We only need to send the navigate once. Once we receive the initial webpage we can handle navigation as we have seen before.
-            $web.navigate("http://localhost:8000/")
-            $form.Controls.Add($web)
-            $form.showdialog()
+            [void][System.Reflection.Assembly]::LoadWithPartialName('presentationframework')
+            [xml]$XAML = @'
+            <Window
+                xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                Title="PowerShell HTML GUI" WindowStartupLocation="CenterScreen">
+
+                    <WebBrowser Name="WebBrowser"></WebBrowser>
+
+            </Window>
+'@
+
+            #Read XAML
+            $reader=(New-Object System.Xml.XmlNodeReader $xaml) 
+            $Form=[Windows.Markup.XamlReader]::Load( $reader )
+            #===========================================================================
+            # Store Form Objects In PowerShell
+            #===========================================================================
+            $WebBrowser = $Form.FindName("WebBrowser")
+
+            $WebBrowser.Navigate("http://localhost:8000/")
+
+            $Form.ShowDialog()
             Start-Sleep -Seconds 1
 
             # Once the end user closes out of the browser we send the kill url to tell the server to shut down.
