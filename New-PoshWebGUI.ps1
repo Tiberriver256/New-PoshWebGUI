@@ -1,147 +1,252 @@
-Function Start-PoshWebGUI ($ScriptBlock)
-{
-    # We create a scriptblock that waits for the server to launch and then opens a web browser control
-    $UserWindow = {
-            
-            # Wait-ServerLaunch will continually repeatedly attempt to get a response from the URL before continuing
-            function Wait-ServerLaunch
-            {
+Function Start-PoshWebGUI {
+    <#
+    .SYNOPSIS
+        Hosts a localhost HttpListener and renders responses in a WPF browser window.
+    .DESCRIPTION
+        Starts an HttpListener on localhost:Port, invokes ScriptBlock once per
+        request (with $Context in scope), and shows the result in a WPF window.
+        Closing the window shuts the server down via an authenticated /kill URL.
 
-                try {
-                    $url="http://localhost:8000/"
-                    $Test = New-Object System.Net.WebClient
-                    $Test.DownloadString($url);
+        Windows-only: requires HttpListener + WPF (PresentationFramework), i.e.
+        Windows PowerShell 5.1 or PowerShell 7 on Windows.
+    .PARAMETER ScriptBlock
+        Code run per request. $Context (HttpListenerContext) is in scope.
+        Return a [string] for raw HTML, or any object (converted to JSON).
+    .PARAMETER Port
+        Localhost TCP port to listen on. Default 8000. Range 1-65535.
+    .PARAMETER Title
+        Window title. Default 'PowerShell HTML GUI'.
+    .PARAMETER KillToken
+        Token required to hit /kill?token=<value>. Auto-generated (GUID) if omitted.
+    .PARAMETER StartupTimeoutSec
+        How long the GUI waits for the server before giving up. Default 30.
+    .PARAMETER NoGUI
+        Start the server loop without opening the WPF window (useful for tests/automation).
+        The caller must request /kill?token=<KillToken> to stop the server.
+    .EXAMPLE
+        Start-PoshWebGUI -ScriptBlock { "<html><body>Hello World!</body></html>" }
+    .EXAMPLE
+        Start-PoshWebGUI -Port 8080 -Title "Task Manager" -ScriptBlock {
+            switch ($Context.Request.Url.LocalPath) {
+                "/loadProcesses" {
+                    # Query values should be treated as untrusted input:
+                    $name = Get-PoshWebGUIQueryValue -Context $Context -Name "ProcessName" -MaxLength 100
+                    Get-Process -Name $name -ErrorAction SilentlyContinue |
+                        Select-Object Name, CPU | ConvertTo-Html | Out-String
                 }
-                catch
-                { start-sleep -Seconds 1; Wait-ServerLaunch }
- 
+                default { "<h1>Simple Task Manager</h1>" }
             }
+        }
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true, Position = 0)]
+        [scriptblock]$ScriptBlock,
 
-            Wait-ServerLaunch
-            [void][System.Reflection.Assembly]::LoadWithPartialName('presentationframework')
-            [xml]$XAML = @'
-            <Window
-                xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                Title="PowerShell HTML GUI" WindowStartupLocation="CenterScreen">
+        [Parameter()]
+        [ValidateRange(1, 65535)]
+        [int]$Port = 8000,
 
-                    <WebBrowser Name="WebBrowser"></WebBrowser>
+        [Parameter()]
+        [ValidateNotNullOrEmpty()]
+        [string]$Title = 'PowerShell HTML GUI',
 
-            </Window>
+        [Parameter()]
+        [ValidateNotNullOrEmpty()]
+        [string]$KillToken = ([System.Guid]::NewGuid().ToString('N')),
+
+        [Parameter()]
+        [ValidateRange(1, 300)]
+        [int]$StartupTimeoutSec = 30,
+
+        [Parameter()]
+        [switch]$NoGUI
+    )
+
+    $BaseUrl = "http://localhost:$Port/"
+
+    # The GUI runs in its own STA runspace so the server loop can block on GetContext().
+    $UserWindow = {
+        param($BaseUrl, $KillToken, $WindowTitle, $TimeoutSec)
+
+        # Poll until the server answers (loop + timeout, no recursion).
+        $deadline = (Get-Date).AddSeconds($TimeoutSec)
+        while ((Get-Date) -lt $deadline) {
+            try {
+                Invoke-WebRequest -Uri $BaseUrl -UseBasicParsing -TimeoutSec 5 | Out-Null
+                break
+            }
+            catch {
+                Start-Sleep -Seconds 1
+            }
+        }
+
+        try {
+            Invoke-WebRequest -Uri $BaseUrl -UseBasicParsing -TimeoutSec 5 | Out-Null
+        }
+        catch {
+            Write-Error "Start-PoshWebGUI: server did not start within $TimeoutSec seconds ($BaseUrl)."
+            return
+        }
+
+        Add-Type -AssemblyName PresentationFramework
+        [xml]$XAML = @'
+<Window
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Title="PowerShell HTML GUI" WindowStartupLocation="CenterScreen">
+        <WebBrowser Name="WebBrowser"></WebBrowser>
+</Window>
 '@
+        $reader = New-Object System.Xml.XmlNodeReader $XAML
+        $Form = [Windows.Markup.XamlReader]::Load($reader)
+        $Form.Title = $WindowTitle
+        $WebBrowser = $Form.FindName('WebBrowser')
+        $WebBrowser.Navigate($BaseUrl)
 
-            #Read XAML
-            $reader=(New-Object System.Xml.XmlNodeReader $xaml) 
-            $Form=[Windows.Markup.XamlReader]::Load( $reader )
-            #===========================================================================
-            # Store Form Objects In PowerShell
-            #===========================================================================
-            $WebBrowser = $Form.FindName("WebBrowser")
+        $Form.ShowDialog() | Out-Null
+        Start-Sleep -Seconds 1
 
-            $WebBrowser.Navigate("http://localhost:8000/")
-
-            $Form.ShowDialog()
-            Start-Sleep -Seconds 1
-
-            # Once the end user closes out of the browser we send the kill url to tell the server to shut down.
-            $url="http://localhost:8000/kill"
-            (New-Object System.Net.WebClient).DownloadString($url);
+        # Authenticated shutdown: only a caller holding the token can stop the server.
+        try {
+            Invoke-WebRequest -Uri ("{0}kill?token={1}" -f $BaseUrl, $KillToken) -UseBasicParsing -TimeoutSec 5 | Out-Null
+        }
+        catch {
+            Write-Verbose "Shutdown request failed (server may already be stopped): $_"
+        }
     }
- 
-    $RunspacePool = [RunspaceFactory]::CreateRunspacePool()
-    $RunspacePool.ApartmentState = "STA"
-    $RunspacePool.Open()
-    $Jobs = @()
- 
 
-       $Job = [powershell]::Create().AddScript($UserWindow).AddArgument($_)
-       $Job.RunspacePool = $RunspacePool
-       $Jobs += New-Object PSObject -Property @{
-          RunNum = $_
-          Pipe = $Job
-          Result = $Job.BeginInvoke()
-       }
+    $RunspacePool = $null
+    $guiPowerShell = $null
+    $guiHandle = $null
+    $SimpleServer = $null
 
+    try {
+        if (-not $NoGUI) {
+            $RunspacePool = [runspacefactory]::CreateRunspacePool()
+            $RunspacePool.ApartmentState = 'STA'
+            $RunspacePool.Open()
 
-    # Create HttpListener Object
-    $SimpleServer = New-Object Net.HttpListener
-
-    # Tell the HttpListener what port to listen on
-    #    As long as we use localhost we don't need admin rights. To listen on externally accessible IP addresses we will need admin rights
-    $SimpleServer.Prefixes.Add("http://localhost:8000/")
-
-    # Start up the server
-    $SimpleServer.Start()
-
-    while($SimpleServer.IsListening)
-    {
-        Write-Host "Listening for request"
-        # Tell the server to wait for a request to come in on that port.
-        $Context = $SimpleServer.GetContext()
-
-        #Once a request has been captured the details of the request and the template for the response are created in our $context variable
-        Write-Verbose "Context has been captured"
-
-        # $Context.Request contains details about the request
-        # $Context.Response is basically a template of what can be sent back to the browser
-        # $Context.User contains information about the user who sent the request. This is useful in situations where authentication is necessary
-
-
-        # Sometimes the browser will request the favicon.ico which we don't care about. We just drop that request and go to the next one.
-        if($Context.Request.Url.LocalPath -eq "/favicon.ico")
-        {
-            do
-            {
-
-                    $Context.Response.Close()
-                    $Context = $SimpleServer.GetContext()
-
-            }while($Context.Request.Url.LocalPath -eq "/favicon.ico")
+            $guiPowerShell = [powershell]::Create()
+            $guiPowerShell.RunspacePool = $RunspacePool
+            [void]$guiPowerShell.AddScript($UserWindow).AddArgument($BaseUrl).AddArgument($KillToken).AddArgument($Title).AddArgument($StartupTimeoutSec)
+            $guiHandle = $guiPowerShell.BeginInvoke()
         }
 
-        # Creating a friendly way to shutdown the server
-        if($Context.Request.Url.LocalPath -eq "/kill")
-        {
+        $SimpleServer = New-Object Net.HttpListener
+        # Localhost only: no admin rights required. Never bind externally without adding authentication.
+        $SimpleServer.Prefixes.Add($BaseUrl)
+        $SimpleServer.Start()
 
+        Write-Verbose "Listening on $BaseUrl"
+        while ($SimpleServer.IsListening) {
+            Write-Verbose 'Listening for request'
+            $Context = $SimpleServer.GetContext()
+            Write-Verbose 'Context has been captured'
+
+            # Browsers request /favicon.ico automatically; answer empty instead of nesting GetContext().
+            if ($Context.Request.Url.LocalPath -eq '/favicon.ico') {
+                $Context.Response.StatusCode = 204
+                $Context.Response.Close()
+                continue
+            }
+
+            # Authenticated shutdown endpoint.
+            if ($Context.Request.Url.LocalPath -eq '/kill') {
+                if ($Context.Request.QueryString['token'] -ne $KillToken) {
+                    $denied = [System.Text.Encoding]::UTF8.GetBytes('Forbidden')
+                    $Context.Response.StatusCode = 403
+                    $Context.Response.ContentType = 'text/plain; charset=utf-8'
+                    $Context.Response.ContentLength64 = $denied.Length
+                    $Context.Response.OutputStream.Write($denied, 0, $denied.Length)
                     $Context.Response.Close()
-                    $SimpleServer.Stop()
-                    break
+                    continue
+                }
+                $Context.Response.StatusCode = 200
+                $Context.Response.Close()
+                $SimpleServer.Stop()
+                break
+            }
 
-        }
-    
-        $Context.Request
-        # Handling different URLs
+            $statusCode = 200
+            $result = try { . $ScriptBlock } catch {
+                $statusCode = 500
+                $msg = [System.Net.WebUtility]::HtmlEncode($_.Exception.Message)
+                "<html><body><h1>500 Server Error</h1><p>$msg</p></body></html>"
+            }
 
-        $result = try {.$ScriptBlock} catch {$_.Exception.Message}
-
-        if($result -ne $null) {
-            if($result -is [string]){
-                
-                Write-Verbose "A [string] object was returned. Writing it directly to the response stream."
-
-            } else {
-
-                Write-Verbose "Converting PS Objects into JSON objects"
+            $contentType = 'text/html; charset=utf-8'
+            if ($null -eq $result) {
+                $result = ''
+            }
+            elseif ($result -isnot [string]) {
+                Write-Verbose 'Converting PS Objects into JSON objects'
                 $result = $result | ConvertTo-Json
-                
+                $contentType = 'application/json; charset=utf-8'
+            }
+            else {
+                Write-Verbose 'A [string] object was returned. Writing it directly to the response stream.'
+            }
+
+            Write-Verbose "Sending response of $result"
+
+            $buffer = [System.Text.Encoding]::UTF8.GetBytes($result)
+            $Context.Response.StatusCode = $statusCode
+            $Context.Response.ContentType = $contentType
+            $Context.Response.ContentLength64 = $buffer.Length
+            $Context.Response.OutputStream.Write($buffer, 0, $buffer.Length)
+            $Context.Response.Close()
+        }
+    }
+    finally {
+        try {
+            if ($SimpleServer -ne $null) {
+                if ($SimpleServer.IsListening) { $SimpleServer.Stop() }
+                $SimpleServer.Close()
             }
         }
+        catch { Write-Verbose "Listener cleanup: $_" }
 
-        Write-Host "Sending response of $Result"
-
-        # We convert the result to bytes from ASCII encoded text
-        $buffer = [System.Text.Encoding]::ASCII.GetBytes($Result)
-
-        # We need to let the browser know how many bytes we are going to be sending
-        $context.Response.ContentLength64 = $buffer.Length
-
-        # We send the response back to the browser
-        $context.Response.OutputStream.Write($buffer, 0, $buffer.Length)
-
-        # We close the response to let the browser know we are done sending the response
-        $Context.Response.Close()
-
-        $Context.Response
+        try {
+            if ($guiHandle -ne $null -and $guiPowerShell -ne $null) {
+                # Wait briefly for the GUI runspace to finish its shutdown request.
+                [void]$guiHandle.AsyncWaitHandle.WaitOne(5000)
+                $guiPowerShell.EndInvoke($guiHandle)
+            }
+        }
+        catch { Write-Verbose "GUI runspace cleanup: $_" }
+        finally {
+            if ($guiPowerShell -ne $null) { $guiPowerShell.Dispose() }
+            if ($RunspacePool -ne $null) { $RunspacePool.Close(); $RunspacePool.Dispose() }
+        }
     }
+}
 
+Function Get-PoshWebGUIQueryValue {
+    <#
+    .SYNOPSIS
+        Safely read a single query-string value (HTML-decoded, length-capped).
+    .DESCRIPTION
+        Treats all query input as untrusted. Returns '' when missing.
+        Pair with [System.Net.WebUtility]::HtmlEncode before reflecting into HTML.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [System.Net.HttpListenerContext]$Context,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateNotNullOrEmpty()]
+        [string]$Name,
+
+        [Parameter()]
+        [ValidateRange(1, 4096)]
+        [int]$MaxLength = 200
+    )
+
+    $value = $Context.Request.QueryString[$Name]
+    if ($null -eq $value) { return '' }
+    $value = $value.Trim()
+    if ($value.Length -gt $MaxLength) { $value = $value.Substring(0, $MaxLength) }
+    return $value
 }

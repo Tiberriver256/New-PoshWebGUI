@@ -1,8 +1,9 @@
 ﻿
-Function Start-PoshWebGUI ($ScriptBlock)
+Function Start-PoshWebGUI ($ScriptBlock, $Title = 'PowerShell HTML GUI', $IconPath = $null)
 {
     # We create a scriptblock that waits for the server to launch and then opens a web browser control
     $UserWindow = {
+        param($WindowTitle, $WindowIconPath)
             
             # Wait-ServerLaunch will continually repeatedly attempt to get a response from the URL before continuing
             function Wait-ServerLaunch
@@ -22,9 +23,12 @@ Function Start-PoshWebGUI ($ScriptBlock)
             [Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms") | out-null
             [Reflection.Assembly]::LoadWithPartialName("System.Drawing")
             $form = New-Object Windows.Forms.Form
-            $form.text = $GUITitle
+            $form.text = $WindowTitle
             $form.size = New-Object Drawing.size @(800,600)
-            $form.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon("C:\cms\OneDrive Fix\Haworth.ico")
+            # Optional icon: pass -IconPath with a .ico file for a custom icon.
+            if ($WindowIconPath -and (Test-Path $WindowIconPath)) {
+                $form.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon($WindowIconPath)
+            }
             $web = New-object System.Windows.Forms.webbrowser
             $web.location = New-object System.Drawing.Point(3,3)
             $web.minimumsize = new-object System.Drawing.Size(20,20)
@@ -47,7 +51,7 @@ Function Start-PoshWebGUI ($ScriptBlock)
     $Jobs = @()
  
 
-       $Job = [powershell]::Create().AddScript($UserWindow).AddArgument($_)
+       $Job = [powershell]::Create().AddScript($UserWindow).AddArgument($Title).AddArgument($IconPath)
        $Job.RunspacePool = $RunspacePool
        $Jobs += New-Object PSObject -Property @{
           RunNum = $_
