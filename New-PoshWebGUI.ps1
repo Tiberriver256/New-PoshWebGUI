@@ -168,7 +168,12 @@ Function Start-PoshWebGUI {
                 break
             }
 
-            $result = try { . $ScriptBlock } catch { $_.Exception.Message }
+            $statusCode = 200
+            $result = try { . $ScriptBlock } catch {
+                $statusCode = 500
+                $msg = [System.Net.WebUtility]::HtmlEncode($_.Exception.Message)
+                "<html><body><h1>500 Server Error</h1><p>$msg</p></body></html>"
+            }
 
             $contentType = 'text/html; charset=utf-8'
             if ($null -eq $result) {
@@ -186,6 +191,7 @@ Function Start-PoshWebGUI {
             Write-Verbose "Sending response of $result"
 
             $buffer = [System.Text.Encoding]::UTF8.GetBytes($result)
+            $Context.Response.StatusCode = $statusCode
             $Context.Response.ContentType = $contentType
             $Context.Response.ContentLength64 = $buffer.Length
             $Context.Response.OutputStream.Write($buffer, 0, $buffer.Length)

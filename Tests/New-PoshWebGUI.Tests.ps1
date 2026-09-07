@@ -19,6 +19,8 @@ Describe 'Module packaging' {
         $data.FunctionsToExport | Should -Contain 'Start-PoshWebGUI'
         $data.FunctionsToExport | Should -Contain 'Get-PoshWebGUIQueryValue'
         $data.PowerShellVersion | Should -Be '5.1'
+        $data.CompatiblePSEditions | Should -Contain 'Desktop'
+        $data.CompatiblePSEditions | Should -Contain 'Core'
     }
 
     It 'psm1 dot-sources the ps1' {
@@ -71,12 +73,29 @@ Describe 'Security' {
         $Source | Should -Match '403'
     }
 
+    It 'returns 500 with an HTML-encoded message on ScriptBlock error' {
+        $Source | Should -Match '\$statusCode = 500'
+        $Source | Should -Match 'HtmlEncode\(\$_\.Exception\.Message\)'
+        $Source | Should -Match '500 Server Error'
+        $Source | Should -Match 'StatusCode = \$statusCode'
+    }
     It 'ships a safe query helper with length cap' {
         $Source | Should -Match 'function Get-PoshWebGUIQueryValue'
         $Source | Should -Match 'MaxLength'
     }
+}
 
-    It 'example HTML-encodes reflected input and escapes wildcards' {
+Describe 'Tutorial Learning/4' {
+    It 'wires the window title via a defaulted param (no undefined $GUITitle)' {
+        $learning = Get-Content (Join-Path $ModuleRoot 'Learning/4_GettingToTheGUI.ps1') -Raw
+        $learning | Should -Not -Match '\$GUITitle'
+        $learning | Should -Match "\$Title = 'PowerShell HTML GUI'"
+        $learning | Should -Match '\$form\.text = \$WindowTitle'
+    }
+}
+
+Describe 'Example' {
+    It 'HTML-encodes reflected input and escapes wildcards' {
         $text = Get-Content (Join-Path $ModuleRoot 'Examples/SimpleTaskManager.ps1') -Raw
         $text | Should -Match 'HtmlEncode'
         $text | Should -Match 'WildcardPattern\]::Escape'
@@ -99,5 +118,13 @@ Describe 'Modernized APIs' {
         $Source | Should -Not -Match 'Haworth\.ico'
         $learning = Get-Content (Join-Path $ModuleRoot 'Learning/4_GettingToTheGUI.ps1') -Raw
         $learning | Should -Not -Match 'C:\\cms\\OneDrive Fix\\Haworth\.ico'
+    }
+}
+
+Describe 'CI workflow' {
+    It 'uses -AllowClobber and fails the run on test failure' {
+        $ci = Get-Content (Join-Path $ModuleRoot '.github/workflows/ci.yml') -Raw
+        $ci | Should -Match '-AllowClobber'
+        $ci | Should -Match 'FailedCount'
     }
 }

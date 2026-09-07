@@ -5,6 +5,7 @@
     Author            = 'Micah Rairdon'
     Description       = 'Host a localhost HttpListener and render responses in a WPF browser window.'
     PowerShellVersion = '5.1'
+    CompatiblePSEditions = @('Desktop', 'Core')
     FunctionsToExport = @('Start-PoshWebGUI', 'Get-PoshWebGUIQueryValue')
     CmdletsToExport   = @()
     VariablesToExport = @()
@@ -12,6 +13,9 @@
     PrivateData       = @{
         PSData = @{
             Tags = @('GUI', 'HttpListener', 'WPF', 'Windows')
+            # TODO: publish to the PowerShell Gallery, then set:
+            # LicenseUri = 'https://github.com/Tiberriver256/New-PoshWebGUI/blob/master/LICENSE'
+            # ProjectUri = 'https://github.com/Tiberriver256/New-PoshWebGUI'
         }
     }
 }
