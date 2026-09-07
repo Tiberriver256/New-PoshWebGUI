@@ -20,7 +20,10 @@ jobs:
       - name: PSScriptAnalyzer (no errors)
         shell: pwsh
         run: |
-          $results = Invoke-ScriptAnalyzer -Path ./New-PoshWebGUI.ps1, ./New-PoshWebGUI.psm1, ./Examples/SimpleTaskManager.ps1 -Severity Error, Warning
+          $files = @('./New-PoshWebGUI.ps1', './New-PoshWebGUI.psm1', './Examples/SimpleTaskManager.ps1')
+          $results = foreach ($file in $files) {
+            Invoke-ScriptAnalyzer -Path $file -Severity Error, Warning
+          }
           $results | Format-Table -AutoSize
           $errors = $results | Where-Object { $_.Severity -eq 'Error' }
           if ($errors) { throw "PSScriptAnalyzer found $($errors.Count) error(s)." }
