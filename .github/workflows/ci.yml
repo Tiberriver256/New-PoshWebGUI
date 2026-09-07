@@ -1,0 +1,31 @@
+name: ci
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  analyze-and-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PSScriptAnalyzer and Pester
+        shell: pwsh
+        run: |
+          Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          Install-Module Pester -Force -Scope CurrentUser -MinimumVersion 5.0.0
+
+      - name: PSScriptAnalyzer (no errors)
+        shell: pwsh
+        run: |
+          $results = Invoke-ScriptAnalyzer -Path ./New-PoshWebGUI.ps1, ./New-PoshWebGUI.psm1, ./Examples/SimpleTaskManager.ps1 -Severity Error, Warning
+          $results | Format-Table -AutoSize
+          $errors = $results | Where-Object { $_.Severity -eq 'Error' }
+          if ($errors) { throw "PSScriptAnalyzer found $($errors.Count) error(s)." }
+
+      - name: Pester tests
+        shell: pwsh
+        run: |
+          Invoke-Pester ./Tests -Output Detailed

@@ -24,7 +24,10 @@ Function Start-PoshWebGUI ($ScriptBlock)
             $form = New-Object Windows.Forms.Form
             $form.text = $GUITitle
             $form.size = New-Object Drawing.size @(800,600)
-            $form.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon("C:\cms\OneDrive Fix\Haworth.ico")
+            # Optional icon: set $IconPath to a .ico file if you want a custom icon.
+            if ($IconPath -and (Test-Path $IconPath)) {
+                $form.Icon = [System.Drawing.Icon]::ExtractAssociatedIcon($IconPath)
+            }
             $web = New-object System.Windows.Forms.webbrowser
             $web.location = New-object System.Drawing.Point(3,3)
             $web.minimumsize = new-object System.Drawing.Size(20,20)
